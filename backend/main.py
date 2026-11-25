@@ -17,7 +17,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from api import analytics, auth, cameras, emergency, hardware, signals, system, traffic
+from api import analytics, auth, cameras, emergency, esp32, hardware, signals, system, traffic
 from core.config import settings
 from core.database import close_db, db_session, engine, init_db
 from core.logging import configure_logging, get_logger
@@ -167,6 +167,7 @@ app.include_router(emergency.router, prefix=settings.API_PREFIX)
 app.include_router(analytics.router, prefix=settings.API_PREFIX)
 app.include_router(system.router, prefix=settings.API_PREFIX)
 app.include_router(hardware.router, prefix=settings.API_PREFIX)
+app.include_router(esp32.router, prefix=settings.API_PREFIX)
 
 
 @app.get("/health", tags=["Health"])
