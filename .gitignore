@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+*.tsbuildinfo
+
+# ML Models & Data (large files)
+ml/models/checkpoints/*.pt
+ml/models/checkpoints/*.onnx
+ml/datasets/images/
+ml/datasets/labels/
+ml/evaluation/results/*.json
+ml/evaluation/results/*.png
+ml/.ultralytics/
+yolov8n.pt
+ml/yolov8n.pt
+!ml/models/checkpoints/.gitkeep
+!ml/datasets/.gitkeep
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Docker volumes
+docker/postgres-data/
+docker/redis-data/
+
+# ESP32
+esp32/firmware/*.bin
+esp32/firmware/*.elf
+
+# IDE
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Secrets (never commit)
+*.pem
+*.crt
+*.key
+*.p12
+tls_certs.h.local
+mosquitto.passwd
+
+# Alembic
+backend/alembic/versions/*.py
+!backend/alembic/versions/001_initial.py
+
+# Misc
+.tmp/
+scratch/
+*.db
+*.sqlite*

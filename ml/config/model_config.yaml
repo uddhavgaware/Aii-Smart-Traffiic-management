@@ -1,0 +1,60 @@
+model:
+  architecture: yolov8n  # yolov8n, yolov8s, yolov8m
+  weights: models/checkpoints/best.pt  # path to trained weights
+  pretrained_fallback: yolov8n.pt  # use if no custom weights
+
+  classes:
+    # Normal vehicles
+    0: car
+    1: motorcycle
+    2: bus
+    3: truck
+    4: auto_rickshaw
+    # Emergency vehicles
+    5: ambulance
+    6: fire_brigade
+
+  num_classes: 7
+  confidence_threshold: 0.45
+  iou_threshold: 0.45
+  max_detections: 100
+  input_size: 640
+
+inference:
+  device: cuda  # cuda or cpu
+  fp16: true  # half precision for RTX 3050
+  batch_size: 1  # per camera
+  warmup_iterations: 3
+
+tracking:
+  algorithm: bytetrack
+  max_age: 30  # frames before track deleted
+  min_hits: 3  # frames before track confirmed
+  iou_threshold: 0.3
+
+density:
+  thresholds:
+    low: 5
+    normal: 15
+    medium: 25
+    high: 40
+    jam: 999
+
+  roi_coverage_weight: 0.3
+  queue_weight: 0.4
+  speed_weight: 0.3
+
+speed:
+  estimation_method: optical_flow  # optical_flow, homography
+  calibrated: false  # requires camera calibration
+  label_as_estimate: true  # always label uncalibrated speeds
+
+prediction:
+  window_size: 30  # seconds of history to use
+  horizon: 45  # seconds to predict ahead
+  method: exponential_smoothing  # moving_average, exp_smoothing, random_forest
+
+server:
+  host: 0.0.0.0
+  port: 8001
+  api_key_header: X-ML-API-Key

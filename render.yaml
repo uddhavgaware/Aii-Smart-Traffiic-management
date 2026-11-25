@@ -1,0 +1,53 @@
+services:
+  - type: web
+    name: smarttraffic-backend
+    runtime: docker
+    dockerfilePath: ./docker/backend/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: JUNCTION_ID
+        value: junction_001
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ML_API_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: smarttraffic-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: smarttraffic-redis
+          property: connectionString
+      - key: CORS_ORIGINS
+        value: '["https://your-frontend.vercel.app","http://localhost:3000"]'
+      - key: ML_INFERENCE_URL
+        value: https://ml.your-domain.com
+      - key: MQTT_BROKER
+        value: your-mqtt-broker.com
+      - key: MQTT_PORT
+        value: "8883"
+      - key: MQTT_USE_TLS
+        value: "true"
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_EMAIL
+        value: admin@smarttraffic.local
+      - key: ADMIN_PASSWORD
+        sync: false
+
+  - type: keyvalue
+    name: smarttraffic-redis
+    plan: free
+    ipAllowList: []
+
+databases:
+  - name: smarttraffic-db
+    plan: free
+    databaseName: smarttraffic
+    user: smarttraffic

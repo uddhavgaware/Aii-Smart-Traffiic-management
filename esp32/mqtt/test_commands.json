@@ -1,0 +1,166 @@
+{
+  "description": "MQTT test commands for Smart Traffic junction1",
+  "broker": "your-mqtt-broker.com:8883",
+  "scenarios": [
+    {
+      "id": "TC-001",
+      "name": "North-South Green Phase",
+      "description": "Allow North and South traffic to flow",
+      "topic": "smarttraffic/junction1/signals/command",
+      "payload": {
+        "cmd": "set_phase",
+        "sequence_id": 1001,
+        "signals": {
+          "north": {"phase": "GREEN", "duration": 45},
+          "south": {"phase": "GREEN", "duration": 45},
+          "east":  {"phase": "RED",   "duration": 50},
+          "west":  {"phase": "RED",   "duration": 50}
+        }
+      }
+    },
+    {
+      "id": "TC-002",
+      "name": "East-West Green Phase",
+      "description": "Allow East and West traffic to flow",
+      "topic": "smarttraffic/junction1/signals/command",
+      "payload": {
+        "cmd": "set_phase",
+        "sequence_id": 1002,
+        "signals": {
+          "north": {"phase": "RED",   "duration": 50},
+          "south": {"phase": "RED",   "duration": 50},
+          "east":  {"phase": "GREEN", "duration": 40},
+          "west":  {"phase": "GREEN", "duration": 40}
+        }
+      }
+    },
+    {
+      "id": "TC-003",
+      "name": "Single Direction Green (North only)",
+      "description": "Only North gets green (unusual but valid)",
+      "topic": "smarttraffic/junction1/signals/command",
+      "payload": {
+        "cmd": "set_phase",
+        "sequence_id": 1003,
+        "signals": {
+          "north": {"phase": "GREEN", "duration": 30},
+          "south": {"phase": "RED",   "duration": 35},
+          "east":  {"phase": "RED",   "duration": 35},
+          "west":  {"phase": "RED",   "duration": 35}
+        }
+      }
+    },
+    {
+      "id": "TC-004",
+      "name": "Emergency All-Red Override",
+      "description": "Force all signals to RED (emergency scenario)",
+      "topic": "smarttraffic/junction1/signals/command",
+      "payload": {
+        "cmd": "set_phase",
+        "sequence_id": 1004,
+        "signals": {
+          "north": {"phase": "RED", "duration": 999},
+          "south": {"phase": "RED", "duration": 999},
+          "east":  {"phase": "RED", "duration": 999},
+          "west":  {"phase": "RED", "duration": 999}
+        }
+      }
+    },
+    {
+      "id": "TC-005",
+      "name": "SAFETY TEST - Conflicting Greens (should be REJECTED)",
+      "description": "This command MUST be rejected by the firmware safety validator",
+      "topic": "smarttraffic/junction1/signals/command",
+      "payload": {
+        "cmd": "set_phase",
+        "sequence_id": 9001,
+        "signals": {
+          "north": {"phase": "GREEN", "duration": 30},
+          "south": {"phase": "RED",   "duration": 30},
+          "east":  {"phase": "GREEN", "duration": 30},
+          "west":  {"phase": "RED",   "duration": 30}
+        }
+      },
+      "expected_result": "REJECTED - ACK with ack=false"
+    },
+    {
+      "id": "TC-006",
+      "name": "SAFETY TEST - All Greens (should be REJECTED)",
+      "description": "All four directions GREEN simultaneously - must be rejected",
+      "topic": "smarttraffic/junction1/signals/command",
+      "payload": {
+        "cmd": "set_phase",
+        "sequence_id": 9002,
+        "signals": {
+          "north": {"phase": "GREEN", "duration": 30},
+          "south": {"phase": "GREEN", "duration": 30},
+          "east":  {"phase": "GREEN", "duration": 30},
+          "west":  {"phase": "GREEN", "duration": 30}
+        }
+      },
+      "expected_result": "REJECTED - ACK with ack=false"
+    },
+    {
+      "id": "TC-007",
+      "name": "SAFETY TEST - Duration too short (should be REJECTED)",
+      "description": "Green duration below minimum (15s) - must be rejected",
+      "topic": "smarttraffic/junction1/signals/command",
+      "payload": {
+        "cmd": "set_phase",
+        "sequence_id": 9003,
+        "signals": {
+          "north": {"phase": "GREEN", "duration": 5},
+          "south": {"phase": "GREEN", "duration": 5},
+          "east":  {"phase": "RED",   "duration": 10},
+          "west":  {"phase": "RED",   "duration": 10}
+        }
+      },
+      "expected_result": "REJECTED - Duration below minimum"
+    },
+    {
+      "id": "TC-008",
+      "name": "Max Duration N-S Green",
+      "description": "Maximum allowed green duration (120s)",
+      "topic": "smarttraffic/junction1/signals/command",
+      "payload": {
+        "cmd": "set_phase",
+        "sequence_id": 1008,
+        "signals": {
+          "north": {"phase": "GREEN", "duration": 120},
+          "south": {"phase": "GREEN", "duration": 120},
+          "east":  {"phase": "RED",   "duration": 125},
+          "west":  {"phase": "RED",   "duration": 125}
+        }
+      }
+    },
+    {
+      "id": "TC-009",
+      "name": "Minimum Duration E-W Green",
+      "description": "Minimum allowed green duration (15s)",
+      "topic": "smarttraffic/junction1/signals/command",
+      "payload": {
+        "cmd": "set_phase",
+        "sequence_id": 1009,
+        "signals": {
+          "north": {"phase": "RED",   "duration": 20},
+          "south": {"phase": "RED",   "duration": 20},
+          "east":  {"phase": "GREEN", "duration": 15},
+          "west":  {"phase": "GREEN", "duration": 15}
+        }
+      }
+    },
+    {
+      "id": "TC-010",
+      "name": "Malformed JSON (should fail gracefully)",
+      "description": "Invalid JSON - firmware must handle gracefully",
+      "topic": "smarttraffic/junction1/signals/command",
+      "raw_payload": "{invalid json here}",
+      "expected_result": "Error published, error blink pattern"
+    }
+  ],
+  "mqtt_cli_examples": {
+    "linux_macos": "mosquitto_pub -h your-mqtt-broker.com -p 8883 --cafile ca.crt -u traffic_system -P your-password -t smarttraffic/junction1/signals/command -m '{\"cmd\":\"set_phase\",\"sequence_id\":1001,...}'",
+    "subscribe_ack": "mosquitto_sub -h your-mqtt-broker.com -p 8883 --cafile ca.crt -u traffic_system -P your-password -t smarttraffic/junction1/signals/ack",
+    "subscribe_status": "mosquitto_sub -h your-mqtt-broker.com -p 8883 --cafile ca.crt -u traffic_system -P your-password -t smarttraffic/junction1/status"
+  }
+}

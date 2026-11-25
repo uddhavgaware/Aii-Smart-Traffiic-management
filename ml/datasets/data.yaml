@@ -1,0 +1,37 @@
+# YOLO Dataset Configuration Template
+# Copy this file to datasets/traffic_dataset/data.yaml and update paths.
+
+# ─── Paths ────────────────────────────────────────────────────────────────────
+# Use absolute paths OR paths relative to this file's location.
+path: ../traffic_dataset   # dataset root directory
+train: images/train        # training images (relative to 'path')
+val: images/val            # validation images (relative to 'path')
+test: images/test          # test images (relative to 'path')  [optional]
+
+# ─── Classes ──────────────────────────────────────────────────────────────────
+nc: 7  # total number of classes
+
+names:
+  0: car
+  1: motorcycle
+  2: bus
+  3: truck
+  4: auto_rickshaw
+  5: ambulance
+  6: fire_brigade
+
+# ─── Dataset Statistics (fill after preparation) ─────────────────────────────
+# stats:
+#   total_images: 0
+#   total_labels: 0
+#   train_images: 0
+#   val_images: 0
+#   test_images: 0
+#   class_distribution:
+#     car: 0
+#     motorcycle: 0
+#     bus: 0
+#     truck: 0
+#     auto_rickshaw: 0
+#     ambulance: 0
+#     fire_brigade: 0
