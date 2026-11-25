@@ -19,7 +19,7 @@ from slowapi.errors import RateLimitExceeded
 
 from api import analytics, auth, cameras, emergency, hardware, signals, system, traffic
 from core.config import settings
-from core.database import close_db, db_session, init_db
+from core.database import close_db, db_session, engine, init_db
 from core.logging import configure_logging, get_logger
 from core.redis_client import close_redis, init_redis
 from core.security import hash_password
@@ -37,6 +37,8 @@ configure_logging(debug=settings.DEBUG)
 logger = get_logger(__name__)
 
 _telemetry_task: asyncio.Task | None = None
+_db_ready: bool = False
+_admin_seeded: bool = False
 
 
 async def _telemetry_broadcaster() -> None:
@@ -60,6 +62,7 @@ async def _telemetry_broadcaster() -> None:
 
 async def _ensure_initial_admin() -> None:
     """Create initial admin user on fresh cloud databases when ADMIN_PASSWORD env var is set."""
+    global _admin_seeded
     if not settings.ADMIN_PASSWORD:
         return
     try:
@@ -78,20 +81,23 @@ async def _ensure_initial_admin() -> None:
                     )
                 )
                 logger.info("initial_admin_created", username=settings.ADMIN_USERNAME)
+            _admin_seeded = True
     except Exception as exc:
         logger.warning("initial_admin_bootstrap_skipped", error=str(exc))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _telemetry_task
+    global _telemetry_task, _db_ready
     logger.info("smart_traffic_backend_starting", junction=settings.JUNCTION_ID)
 
     # 1. Database & Redis
     try:
         await init_db()
+        _db_ready = True
         await _ensure_initial_admin()
     except Exception as exc:
+        _db_ready = False
         logger.warning("db_init_deferred", error=str(exc))
     await init_redis()
 
@@ -170,6 +176,9 @@ async def root_health() -> dict[str, Any]:
         "service": settings.APP_TITLE,
         "version": settings.APP_VERSION,
         "junction_id": settings.JUNCTION_ID,
+        "db_ready": _db_ready,
+        "db_driver": engine.url.drivername,
+        "admin_seeded": _admin_seeded,
     }
 
 

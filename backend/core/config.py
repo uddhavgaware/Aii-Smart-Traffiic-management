@@ -5,7 +5,9 @@ Application configuration loaded from environment variables via Pydantic Setting
 from __future__ import annotations
 
 import json
+import os
 from typing import List, Union
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from pydantic import AnyHttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -76,12 +78,39 @@ class Settings(BaseSettings):
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def normalize_database_url(cls, v: str) -> str:
-        if isinstance(v, str):
-            if v.startswith("postgres://"):
-                return "postgresql+asyncpg://" + v[len("postgres://"):]
-            if v.startswith("postgresql://") and "+asyncpg" not in v:
-                return "postgresql+asyncpg://" + v[len("postgresql://"):]
-        return v
+        if not isinstance(v, str):
+            return v
+        raw = v.strip()
+        # On cloud PaaS (Render/Railway), fall back to local SQLite if DATABASE_URL was omitted
+        is_cloud = any(os.getenv(k) for k in ("RENDER", "RAILWAY_ENVIRONMENT", "DYNO", "PORT"))
+        if is_cloud and (not raw or "@localhost:5432/smarttraffic" in raw):
+            return "sqlite+aiosqlite:///./smarttraffic.db"
+
+        if raw.startswith("postgres://"):
+            raw = "postgresql+asyncpg://" + raw[len("postgres://"):]
+        elif raw.startswith("postgresql://") and "+asyncpg" not in raw:
+            raw = "postgresql+asyncpg://" + raw[len("postgresql://"):]
+
+        if raw.startswith("postgresql+asyncpg://"):
+            parsed = urlparse(raw)
+            if parsed.query:
+                params = []
+                has_ssl = False
+                for k, val in parse_qsl(parsed.query, keep_blank_values=True):
+                    kl = k.lower()
+                    if kl == "sslmode":
+                        if val.lower() in ("require", "verify-ca", "verify-full"):
+                            params.append(("ssl", "require"))
+                            has_ssl = True
+                    elif kl == "ssl":
+                        params.append((k, val))
+                        has_ssl = True
+                    elif kl != "channel_binding":
+                        params.append((k, val))
+                if not has_ssl and "sslmode=" in parsed.query.lower():
+                    params.append(("ssl", "require"))
+                raw = urlunparse(parsed._replace(query=urlencode(params)))
+        return raw
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
@@ -91,11 +120,11 @@ class Settings(BaseSettings):
             try:
                 parsed = json.loads(v)
                 if isinstance(parsed, list):
-                    return parsed
+                    return [str(o).strip().rstrip("/") for o in parsed if str(o).strip()]
             except (json.JSONDecodeError, ValueError):
                 pass
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
-        return v
+            return [origin.strip().rstrip("/") for origin in v.split(",") if origin.strip()]
+        return [str(o).strip().rstrip("/") for o in v if str(o).strip()]
 
     @property
     def mqtt_signal_command_topic(self) -> str:
