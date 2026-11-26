@@ -26,6 +26,28 @@ from services.runtime import runtime
 from services.websocket_manager import ws_manager
 
 router = APIRouter(prefix="/system", tags=["System"])
+_LAST_ML_PROBE_AT: float = 0.0
+
+
+async def _refresh_ai_status(force: bool = False) -> bool:
+    """Probe ML_INFERENCE_URL with short timeout and 8s cache so /status never lags."""
+    global _LAST_ML_PROBE_AT
+    now = time.time()
+    if not force and (now - _LAST_ML_PROBE_AT) < 8.0:
+        return runtime.ai_engine_status == "running"
+
+    _LAST_ML_PROBE_AT = now
+    ml_url = (settings.ML_INFERENCE_URL or "").strip().rstrip("/")
+    ml_ok = False
+    if ml_url:
+        try:
+            async with httpx.AsyncClient(timeout=1.5) as client:
+                r = await client.get(f"{ml_url}/infer/status")
+                ml_ok = r.status_code == 200
+        except Exception:
+            ml_ok = False
+    runtime.ai_engine_status = "running" if (ml_ok or runtime.demo_mode) else "stopped"
+    return ml_ok
 
 
 class DemoToggleRequest(BaseModel):
@@ -42,16 +64,7 @@ async def system_health(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
         pass
 
     redis_ok = await redis_health_check()
-
-    ml_ok = False
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            r = await client.get(f"{settings.ML_INFERENCE_URL}/infer/status")
-            ml_ok = r.status_code == 200
-    except Exception:
-        pass
-
-    runtime.ai_engine_status = "running" if ml_ok else ("running" if runtime.demo_mode else "stopped")
+    ml_ok = await _refresh_ai_status(force=True)
 
     return {
         "status": "healthy" if db_ok else "degraded",
@@ -69,6 +82,7 @@ async def system_health(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
 async def get_system_status(
     current_user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
+    await _refresh_ai_status(force=False)
     return {
         "junction_status": "online",
         "ai_engine_status": runtime.ai_engine_status,

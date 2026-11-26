@@ -34,7 +34,7 @@ export default function MobileCamera() {
   const [streaming, setStreaming] = useState(false)
   const [connStatus, setConnStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected')
   const [fpsSent, setFpsSent] = useState(0)
-  const [targetFps, setTargetFps] = useState(15)
+  const [targetFps, setTargetFps] = useState(8)
   const [qrInput, setQrInput] = useState('')
   const [scanningQR, setScanningQR] = useState(false)
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment')
@@ -276,11 +276,12 @@ export default function MobileCamera() {
       const video = videoRef.current
       const canvas = canvasRef.current
       if (!video || !canvas || video.readyState < 2) return
-      if (wsService.getBufferedAmount() > 131072) return
+      // Strict 32KB WebSocket backpressure guard so stale frames drop instead of building ping lag
+      if (wsService.getBufferedAmount() > 32768) return
 
       const vw = video.videoWidth || 640
       const vh = video.videoHeight || 360
-      const maxEdge = 640
+      const maxEdge = 512
       const scale = Math.min(1, maxEdge / Math.max(vw, vh))
       const captureW = Math.max(160, Math.round((vw * scale) / 2) * 2)
       const captureH = Math.max(160, Math.round((vh * scale) / 2) * 2)
@@ -293,7 +294,7 @@ export default function MobileCamera() {
       if (!ctx) return
 
       ctx.drawImage(video, 0, 0, captureW, captureH)
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.6)
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.48)
 
       const ok = wsService.send({
         type: 'camera_frame',
@@ -485,9 +486,10 @@ export default function MobileCamera() {
                 aria-label="Target FPS"
                 className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-100 disabled:opacity-60"
               >
-                <option value={10}>10 FPS</option>
+                <option value={5}>5 FPS (Low Ping)</option>
+                <option value={8}>8 FPS (Balanced)</option>
+                <option value={12}>12 FPS</option>
                 <option value={15}>15 FPS</option>
-                <option value={20}>20 FPS</option>
               </select>
               <Button variant="outline" size="sm" className="w-full" leftIcon={<QrCode className="w-3.5 h-3.5" />} onClick={scanQrFromVideo} isLoading={scanningQR}>
                 Scan QR
