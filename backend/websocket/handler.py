@@ -188,7 +188,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 direction = str(payload.get("direction", "")).lower()
                 image = payload.get("image")
                 if direction in ("north", "south", "east", "west") and isinstance(image, str):
-                    ws_manager.bind_camera(direction, websocket)
+                    is_dashboard_clip = bool(token) or str(payload.get("device_id", "")).startswith("clip-")
+                    if not is_dashboard_clip:
+                        ws_manager.bind_camera(direction, websocket)
                     ws_manager.store_camera_frame(direction, payload)
                     if direction not in bound_directions:
                         bound_directions.add(direction)

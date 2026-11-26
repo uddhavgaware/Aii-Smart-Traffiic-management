@@ -107,6 +107,10 @@ export function CameraFeed({ direction, onReconnect, onDisconnect, compact = fal
         cvs.width = cw
         cvs.height = ch
       }
+      const nextRes = `${cw}x${ch}`
+      if (useAppStore.getState().cameraFeeds[direction].resolution !== nextRes) {
+        useAppStore.getState().setCameraFeed(direction, { resolution: nextRes })
+      }
       const ctx = cvs.getContext('2d')
       if (!ctx) return
       ctx.drawImage(vid, 0, 0, cw, ch)
@@ -218,12 +222,19 @@ export function CameraFeed({ direction, onReconnect, onDisconnect, compact = fal
 
       ctx.strokeStyle = color
       ctx.lineWidth = isEmergency ? 3 : 2
+      ctx.fillStyle = isEmergency ? 'rgba(239, 68, 68, 0.18)' : 'rgba(34, 211, 238, 0.08)'
+      ctx.fillRect(x, y, w, h)
       ctx.strokeRect(x, y, w, h)
 
-      if (isEmergency) {
-        ctx.fillStyle = 'rgba(239, 68, 68, 0.14)'
-        ctx.fillRect(x, y, w, h)
-      }
+      // Corner accent ticks for clear animated tracking visibility
+      const corner = Math.max(4, Math.min(10, Math.min(w, h) * 0.25))
+      ctx.beginPath()
+      ctx.lineWidth = isEmergency ? 3.5 : 2.5
+      ctx.moveTo(x, y + corner); ctx.lineTo(x, y); ctx.lineTo(x + corner, y)
+      ctx.moveTo(x + w - corner, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + corner)
+      ctx.moveTo(x, y + h - corner); ctx.lineTo(x, y + h); ctx.lineTo(x + corner, y + h)
+      ctx.moveTo(x + w - corner, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - corner)
+      ctx.stroke()
 
       const label = `${det.class}${det.trackId !== undefined ? ` #${det.trackId}` : ''} ${(det.confidence * 100).toFixed(0)}%`
       ctx.font = '600 11px "JetBrains Mono", monospace'
@@ -408,16 +419,16 @@ export function CameraFeed({ direction, onReconnect, onDisconnect, compact = fal
           </div>
         )}
 
-        {/* Bounding box canvas overlay */}
+        {/* Bounding box canvas overlay (explicit z-10 above GPU video layer) */}
         <canvas
           ref={canvasRef}
           width={640}
           height={360}
-          className="absolute inset-0 w-full h-full pointer-events-none"
+          className="absolute inset-0 z-10 w-full h-full pointer-events-none"
         />
 
         {/* Bottom HUD overlay */}
-        <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between pointer-events-none">
+        <div className="absolute bottom-2 left-2 right-2 z-20 flex items-center justify-between pointer-events-none">
           <div className="px-2 py-1 rounded bg-slate-950/80 border border-slate-800 backdrop-blur-sm text-[11px] font-mono text-slate-200">
             Vehicles: <span className="text-cyan-400 font-bold">{feed.vehicleCount || traffic.count}</span>
           </div>
