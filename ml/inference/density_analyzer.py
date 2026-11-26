@@ -26,6 +26,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from .model import DetectionResult
 from .tracker import TrackedVehicle, TrackerResult
 
 logger = logging.getLogger(__name__)
@@ -110,9 +111,10 @@ class TrafficDensityAnalyzer:
             (int(thresholds.get("jam", 999)),   DensityLevel.TRAFFIC_JAM),
         ]
 
-        self._roi_w: float  = float(config.get("roi_coverage_weight", 0.3))
-        self._queue_w: float = float(config.get("queue_weight", 0.4))
-        self._speed_w: float = float(config.get("speed_weight", 0.3))
+        self._count_w: float = float(config.get("count_weight", 0.35))
+        self._roi_w: float   = float(config.get("roi_coverage_weight", 0.20))
+        self._queue_w: float = float(config.get("queue_weight", 0.25))
+        self._speed_w: float = float(config.get("speed_weight", 0.20))
 
         # History for speed estimation (track_id → deque of centroids)
         self._centroid_history: dict[int, deque] = {}
@@ -160,6 +162,7 @@ class TrafficDensityAnalyzer:
         tracks: TrackerResult,
         roi_polygon: np.ndarray,
         frame: Optional[np.ndarray] = None,
+        detections: Optional[DetectionResult] = None,
     ) -> DensityResult:
         """
         Compute density for one frame.
@@ -172,13 +175,24 @@ class TrafficDensityAnalyzer:
             Polygon in pixel coords defining the region of interest, shape (N, 2).
         frame : np.ndarray | None
             Current BGR frame; used for optical-flow speed estimation.
+        detections : DetectionResult | None
+            Optional raw detections; prevents newly-entered/small distant vehicles
+            from being undercounted before ByteTrack promotes their track IDs.
         """
         # --- Filter tracks inside ROI ---
         in_roi: list[TrackedVehicle] = [
             t for t in tracks.tracks
             if self._point_in_roi(t.centroid, roi_polygon)
         ]
-        count = len(in_roi)
+        tracked_count = len(in_roi)
+        det_boxes_in_roi: list[np.ndarray] = []
+        if detections is not None and detections.detections:
+            for d in detections.detections:
+                cx = (d.bbox_xyxy[0] + d.bbox_xyxy[2]) * 0.5
+                cy = (d.bbox_xyxy[1] + d.bbox_xyxy[3]) * 0.5
+                if self._point_in_roi(np.array([cx, cy]), roi_polygon):
+                    det_boxes_in_roi.append(d.bbox_xyxy)
+        count = max(tracked_count, len(det_boxes_in_roi))
 
         # --- Queue length ---
         queue_len = self.estimate_queue_length(tracks, roi_polygon)
@@ -188,13 +202,15 @@ class TrafficDensityAnalyzer:
 
         # --- ROI coverage ---
         roi_area = max(self._roi_area(roi_polygon), 1.0)
-        bbox_union_area = sum(self._bbox_area(t.bbox_xyxy) for t in in_roi)
-        roi_coverage = min(bbox_union_area / roi_area, 1.0)
+        track_union_area = sum(self._bbox_area(t.bbox_xyxy) for t in in_roi)
+        det_union_area = sum(self._bbox_area(b) for b in det_boxes_in_roi)
+        roi_coverage = min(max(track_union_area, det_union_area) / roi_area, 1.0)
 
         # --- Weighted density score (normalized per component) ---
-        count_norm   = min(count / 40.0, 1.0)              # 40 = jam threshold
-        queue_norm   = min(queue_len / 20.0, 1.0)          # 20 stopped = jam
-        roi_cov_norm = roi_coverage                         # already 0–1
+        count_norm   = min(count / 30.0, 1.0)              # 30+ visible in ROI = jam saturation
+        queue_norm   = min(queue_len / 18.0, 1.0)          # 18+ stopped = jam
+        # In full-frame perspective views, even heavy bumper-to-bumper jams occupy ~35-50% of pixels
+        roi_cov_norm = min(roi_coverage / 0.45, 1.0)
 
         # Speed: low speed → higher score (inverted)
         speed_norm = 0.0
@@ -202,11 +218,14 @@ class TrafficDensityAnalyzer:
             # value in px/frame; 0 = stopped, >15 = fast → normalize inverted
             speed_norm = max(0.0, 1.0 - (speed_est.value / 15.0))
 
+        total_w = max(self._count_w + self._roi_w + self._queue_w + self._speed_w, 1e-6)
         weighted = (
-            self._roi_w  * roi_cov_norm +
+            self._count_w * count_norm +
+            self._roi_w   * roi_cov_norm +
             self._queue_w * queue_norm +
             self._speed_w * speed_norm
-        )
+        ) / total_w
+        queue_pct = round(min(100.0, (queue_len / 18.0) * 100.0), 1)
 
         # --- Blend count-based and weighted-score-based classification ---
         count_level = self._classify_by_count(count)
@@ -224,7 +243,7 @@ class TrafficDensityAnalyzer:
         return DensityResult(
             level=final_level,
             vehicle_count=count,
-            queue_length=queue_len,
+            queue_length=queue_pct,
             roi_coverage=roi_coverage,
             speed_estimate=speed_est,
             weighted_score=weighted,

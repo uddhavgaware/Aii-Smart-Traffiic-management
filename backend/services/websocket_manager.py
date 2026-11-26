@@ -54,6 +54,17 @@ class WebSocketManager:
     def bind_camera(self, direction: str, websocket: WebSocket) -> None:
         self.camera_sockets[direction] = websocket
 
+    async def disconnect_camera(self, direction: str) -> None:
+        """Close and unbind the active WebSocket stream for a camera direction."""
+        self.latest_frames.pop(direction, None)
+        ws = self.camera_sockets.pop(direction, None)
+        if ws is not None:
+            self.active_connections.pop(ws, None)
+            try:
+                await ws.close(code=1000, reason="Disconnected from dashboard")
+            except Exception:
+                pass
+
     def store_camera_frame(self, direction: str, payload: dict[str, Any]) -> None:
         self.latest_frames[direction] = {
             **payload,

@@ -184,7 +184,12 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
                     await ws_manager.broadcast(
                         "camera_frame",
-                        {"direction": direction, "image": image, "device_id": payload.get("device_id")},
+                        {
+                            "direction": direction,
+                            "image": image,
+                            "device_id": payload.get("device_id"),
+                            "resolution": payload.get("resolution"),
+                        },
                         exclude_cameras=True,
                         exclude=websocket,
                     )

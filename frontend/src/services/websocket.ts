@@ -161,7 +161,10 @@ class WebSocketService {
         if (direction && payload.image) {
           this.lastRawFrameAt[direction] = Date.now()
           store.setCameraSnapshot(direction, payload.image as string)
-          store.setCameraFeed(direction, { status: 'connected' })
+          store.setCameraFeed(direction, {
+            status: 'connected',
+            ...(payload.resolution ? { resolution: String(payload.resolution) } : {}),
+          })
           store.setSystemStatus({
             camerasConnected: { ...store.systemStatus.camerasConnected, [direction]: true },
           })
@@ -265,7 +268,13 @@ class WebSocketService {
         store.setSystemStatus({
           camerasConnected: { ...store.systemStatus.camerasConnected, [direction]: false },
         })
-        store.setCameraFeed(direction, { status: 'disconnected' })
+        store.setCameraSnapshot(direction, null)
+        store.setCameraFeed(direction, {
+          status: 'disconnected',
+          fps: 0,
+          vehicleCount: 0,
+          detections: [],
+        })
         store.addNotification({ type: 'warning', message: `Camera disconnected: ${direction}` })
         break
       }

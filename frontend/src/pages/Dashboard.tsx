@@ -118,6 +118,22 @@ export default function Dashboard() {
     }
   }
 
+  const handleCameraDisconnect = async (direction: Direction) => {
+    try {
+      await cameraApi.disconnect(direction)
+      useAppStore.getState().setCameraSnapshot(direction, null)
+      useAppStore.getState().setCameraFeed(direction, {
+        status: 'disconnected',
+        fps: 0,
+        vehicleCount: 0,
+        detections: [],
+      })
+      toast.success(`Disconnected ${direction.toUpperCase()} camera`)
+    } catch {
+      toast.error(`Failed to disconnect ${direction.toUpperCase()} camera`)
+    }
+  }
+
   const handleHardwarePing = async () => {
     try {
       await hardwareApi.getStatus()
@@ -169,7 +185,13 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
         <div className={`xl:col-span-7 grid gap-4 ${filterDir === 'all' ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'}`}>
           {visibleDirections.map((dir) => (
-            <CameraFeed key={dir} direction={dir} onReconnect={handleCameraReconnect} compact />
+            <CameraFeed
+              key={dir}
+              direction={dir}
+              onReconnect={handleCameraReconnect}
+              onDisconnect={handleCameraDisconnect}
+              compact
+            />
           ))}
         </div>
 

@@ -13,6 +13,7 @@ COPY --from=builder /app/wheels /wheels
 RUN pip install --no-cache /wheels/* && rm -rf /wheels
 
 COPY backend/ /app/
+COPY ml/demo_clips/demo_approach_1.mp4 ml/demo_clips/demo_approach_2.mp4 /app/demo_clips/
 
 EXPOSE 8000
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

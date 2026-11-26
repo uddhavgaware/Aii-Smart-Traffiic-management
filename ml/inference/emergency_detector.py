@@ -135,6 +135,8 @@ class EmergencyDetector:
 
         # track_id → deque of (frame_roi, timestamp)
         self._roi_history: dict[int, deque] = {}
+        # track_id → deque of cached per-frame red/blue beacon color scores
+        self._color_history: dict[int, deque] = {}
         # track_id → latest classification
         self._classification_cache: dict[int, EmergencyClassification] = {}
 
@@ -229,36 +231,39 @@ class EmergencyDetector:
         confidence = min(1.0, flash_count / expected_flashes)
         return flash_count, confidence
 
-    def _detect_emergency_colors(self, roi_history: deque) -> float:
+    @staticmethod
+    def _score_roi_colors(roi: np.ndarray) -> float:
+        """Compute red/blue emergency beacon saturation score for a single ROI (top 35% beacon zone)."""
+        try:
+            beacon_h = max(1, int(roi.shape[0] * 0.35))
+            beacon_roi = roi[:beacon_h, :] if roi.shape[0] >= 12 else roi
+            hsv = cv2.cvtColor(beacon_roi, cv2.COLOR_BGR2HSV)
+            total_px = hsv.shape[0] * hsv.shape[1]
+            if total_px == 0:
+                return 0.0
+
+            red_mask1 = cv2.inRange(hsv, (0, 120, 100), (10, 255, 255))
+            red_mask2 = cv2.inRange(hsv, (160, 120, 100), (180, 255, 255))
+            red_mask = cv2.bitwise_or(red_mask1, red_mask2)
+            blue_mask = cv2.inRange(hsv, (100, 120, 100), (130, 255, 255))
+
+            emergency_px = int(np.count_nonzero(red_mask)) + int(np.count_nonzero(blue_mask))
+            return min(1.0, emergency_px / (total_px * 0.15))
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+    def _detect_emergency_colors(self, roi_history: deque, track_id: Optional[int] = None) -> float:
         """
         Look for red/blue high-saturation regions across ROI frames.
-
-        Returns a color_match_score in [0, 1].
+        Uses cached per-frame scores when track_id is tracked to avoid O(N) HSV recomputation.
         """
+        if track_id is not None and track_id in self._color_history and self._color_history[track_id]:
+            return float(np.mean(self._color_history[track_id]))
+
         if not roi_history:
             return 0.0
 
-        color_scores: list[float] = []
-        for roi, _ in roi_history:
-            try:
-                hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-                total_px = hsv.shape[0] * hsv.shape[1]
-                if total_px == 0:
-                    continue
-
-                # Red hue: 0-10 and 160-180 (wraps around), high sat, high val
-                red_mask1 = cv2.inRange(hsv, (0, 120, 100), (10, 255, 255))
-                red_mask2 = cv2.inRange(hsv, (160, 120, 100), (180, 255, 255))
-                red_mask  = cv2.bitwise_or(red_mask1, red_mask2)
-
-                # Blue hue: 100–130
-                blue_mask = cv2.inRange(hsv, (100, 120, 100), (130, 255, 255))
-
-                emergency_px = int(np.count_nonzero(red_mask)) + int(np.count_nonzero(blue_mask))
-                color_scores.append(min(1.0, emergency_px / (total_px * 0.15)))
-            except Exception:  # noqa: BLE001
-                pass
-
+        color_scores = [self._score_roi_colors(roi) for roi, _ in roi_history]
         return float(np.mean(color_scores)) if color_scores else 0.0
 
     def stage2_classify(
@@ -286,8 +291,10 @@ class EmergencyDetector:
         roi = self._extract_roi(frame, bbox)
         if track_id not in self._roi_history:
             self._roi_history[track_id] = deque(maxlen=self._history_len)
+            self._color_history[track_id] = deque(maxlen=self._history_len)
         if roi is not None:
             self._roi_history[track_id].append((roi, time.time()))
+            self._color_history[track_id].append(self._score_roi_colors(roi))
 
         history = self._roi_history[track_id]
 
@@ -309,7 +316,7 @@ class EmergencyDetector:
 
         # --- Run analysis ---
         flash_count, flash_conf = self._detect_flashing(history)
-        color_score = self._detect_emergency_colors(history)
+        color_score = self._detect_emergency_colors(history, track_id=track_id)
 
         # Combined confidence
         confidence = (flash_conf * 0.6) + (color_score * 0.4)
@@ -366,6 +373,7 @@ class EmergencyDetector:
         stale = set(self._roi_history.keys()) - active_ids
         for sid in stale:
             del self._roi_history[sid]
+            self._color_history.pop(sid, None)
             self._classification_cache.pop(sid, None)
 
         return EmergencyState(

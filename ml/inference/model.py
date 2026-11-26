@@ -81,6 +81,8 @@ class TrafficDetectionModel:
     """
 
     EMERGENCY_CLASS_IDS: frozenset[int] = frozenset({5, 6})
+    # COCO vehicle classes: 2=car, 3=motorcycle, 5=bus, 7=truck
+    COCO_VEHICLE_CLASS_IDS: list[int] = [2, 3, 5, 7]
 
     def __init__(self, config_path: str) -> None:
         self._config = self._load_config(config_path)
@@ -89,9 +91,9 @@ class TrafficDetectionModel:
 
         self.device = self._resolve_device(self._inf_cfg.get("device", "cuda"))
         self.fp16: bool = self._inf_cfg.get("fp16", False) and self.device.type == "cuda"
-        self.conf_threshold: float = self._model_cfg.get("confidence_threshold", 0.45)
-        self.iou_threshold: float = self._model_cfg.get("iou_threshold", 0.45)
-        self.max_det: int = self._model_cfg.get("max_detections", 100)
+        self.conf_threshold: float = self._model_cfg.get("confidence_threshold", 0.25)
+        self.iou_threshold: float = self._model_cfg.get("iou_threshold", 0.55)
+        self.max_det: int = self._model_cfg.get("max_detections", 300)
         self.input_size: int = self._model_cfg.get("input_size", 640)
 
         self._class_map: dict[int, str] = {
@@ -100,6 +102,7 @@ class TrafficDetectionModel:
 
         self.model_trained: bool = False
         self._model = self._load_model()
+        self._infer_classes: Optional[list[int]] = None if self.model_trained else self.COCO_VEHICLE_CLASS_IDS
         self._warmup(self._inf_cfg.get("warmup_iterations", 3))
 
     # ------------------------------------------------------------------
@@ -138,9 +141,14 @@ class TrafficDetectionModel:
                 "ultralytics package not installed. Run: pip install ultralytics"
             ) from exc
 
-        # --- Try custom weights first ---
-        custom_weights = Path(self._model_cfg.get("weights", ""))
-        if custom_weights.exists():
+        # --- Try custom weights first (resolve relative to ml/ if needed) ---
+        weights_str = self._model_cfg.get("weights", "")
+        custom_weights = Path(weights_str)
+        if weights_str and not custom_weights.is_absolute() and not custom_weights.exists():
+            ml_relative = Path(__file__).resolve().parent.parent / custom_weights
+            if ml_relative.exists():
+                custom_weights = ml_relative
+        if weights_str and custom_weights.exists():
             logger.info("Loading custom weights: %s", custom_weights)
             model = YOLO(str(custom_weights))
             self.model_trained = True
@@ -166,12 +174,18 @@ class TrafficDetectionModel:
         return model
 
     def _warmup(self, iterations: int) -> None:
-        """Run dummy inference to prime CUDA JIT caches and validate FP16."""
+        """Run dummy inference on square and 16:9 frames to prime CUDA JIT caches and validate FP16."""
         if iterations <= 0:
             return
-        dummy = np.zeros((self.input_size, self.input_size, 3), dtype=np.uint8)
+        w_16_9 = self.input_size
+        h_16_9 = max(320, int(round(w_16_9 * 9 / 16)))
+        warmup_shapes = [
+            (self.input_size, self.input_size, 3),
+            (h_16_9, w_16_9, 3),
+        ]
         logger.info("Warming up model (%d iterations, fp16=%s)…", iterations, self.fp16)
         for i in range(iterations):
+            dummy = np.zeros(warmup_shapes[i % len(warmup_shapes)], dtype=np.uint8)
             try:
                 self._model(
                     dummy,
@@ -179,6 +193,7 @@ class TrafficDetectionModel:
                     iou=self.iou_threshold,
                     max_det=self.max_det,
                     imgsz=self.input_size,
+                    classes=self._infer_classes,
                     half=self.fp16,
                     device=0 if self.device.type == "cuda" else "cpu",
                     verbose=False,
@@ -193,6 +208,7 @@ class TrafficDetectionModel:
                         iou=self.iou_threshold,
                         max_det=self.max_det,
                         imgsz=self.input_size,
+                        classes=self._infer_classes,
                         half=False,
                         device=0 if self.device.type == "cuda" else "cpu",
                         verbose=False,
@@ -239,6 +255,7 @@ class TrafficDetectionModel:
             iou=self.iou_threshold,
             max_det=self.max_det,
             imgsz=self.input_size,
+            classes=self._infer_classes,
             half=self.fp16,
             device=0 if self.device.type == "cuda" else "cpu",
             verbose=False,
@@ -247,20 +264,22 @@ class TrafficDetectionModel:
         inference_ms = (time.perf_counter() - t0) * 1000.0
         detections: list[Detection] = []
 
-        if results and results[0].boxes is not None:
+        if results and results[0].boxes is not None and len(results[0].boxes) > 0:
             boxes = results[0].boxes
-            for i in range(len(boxes)):
-                xyxy = boxes.xyxy[i].cpu().numpy().astype(np.float32)
-                conf = float(boxes.conf[i].cpu().numpy())
-                cls  = int(boxes.cls[i].cpu().numpy())
+            # Batch CUDA->CPU transfer once instead of syncing per detection
+            xyxy_all = boxes.xyxy.cpu().numpy().astype(np.float32)
+            conf_all = boxes.conf.cpu().numpy()
+            cls_all = boxes.cls.cpu().numpy().astype(int)
+            for i in range(len(xyxy_all)):
+                cls = int(cls_all[i])
                 name = self._map_class(cls)
                 # Only treat classes 5/6 as emergency when custom-trained weights are active
                 # (in COCO pretrained weights, class 5 is 'bus' and 6 is 'train').
                 is_em = self.model_trained and (cls in self.EMERGENCY_CLASS_IDS)
                 detections.append(
                     Detection(
-                        bbox_xyxy=xyxy,
-                        confidence=conf,
+                        bbox_xyxy=xyxy_all[i],
+                        confidence=float(conf_all[i]),
                         class_id=cls,
                         class_name=name,
                         is_emergency=is_em,

@@ -1,7 +1,7 @@
 model:
-  architecture: yolov8n  # yolov8n, yolov8s, yolov8m
+  architecture: yolov8s  # yolov8n, yolov8s, yolov8m
   weights: models/checkpoints/best.pt  # path to trained weights
-  pretrained_fallback: yolov8n.pt  # use if no custom weights
+  pretrained_fallback: yolov8s.pt  # use if no custom weights
 
   classes:
     # Normal vehicles
@@ -15,10 +15,10 @@ model:
     6: fire_brigade
 
   num_classes: 7
-  confidence_threshold: 0.45
-  iou_threshold: 0.45
-  max_detections: 100
-  input_size: 640
+  confidence_threshold: 0.25
+  iou_threshold: 0.55
+  max_detections: 300
+  input_size: 832
 
 inference:
   device: cuda  # cuda or cpu
@@ -29,20 +29,24 @@ inference:
 tracking:
   algorithm: bytetrack
   max_age: 30  # frames before track deleted
-  min_hits: 3  # frames before track confirmed
+  min_hits: 1  # confirm tracks immediately for low-latency live display
+  activation_threshold: 0.15
+  match_threshold: 0.90
   iou_threshold: 0.3
+  frame_rate: 15
 
 density:
   thresholds:
-    low: 5
-    normal: 15
-    medium: 25
-    high: 40
+    low: 4
+    normal: 10
+    medium: 18
+    high: 28
     jam: 999
 
-  roi_coverage_weight: 0.3
-  queue_weight: 0.4
-  speed_weight: 0.3
+  count_weight: 0.35
+  roi_coverage_weight: 0.20
+  queue_weight: 0.25
+  speed_weight: 0.20
 
 speed:
   estimation_method: optical_flow  # optical_flow, homography

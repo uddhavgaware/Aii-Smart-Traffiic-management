@@ -54,25 +54,25 @@
 // Pin Definitions
 // ─────────────────────────────────────────────────────────────
 
-// North direction
-#define PIN_NORTH_RED    2
-#define PIN_NORTH_YELLOW 4
-#define PIN_NORTH_GREEN  5
+// North direction (using former East pins)
+#define PIN_NORTH_RED    26
+#define PIN_NORTH_YELLOW 27
+#define PIN_NORTH_GREEN  32
 
-// South direction
-#define PIN_SOUTH_RED    12
-#define PIN_SOUTH_YELLOW 13
-#define PIN_SOUTH_GREEN  14
+// South direction (using former West pins)
+#define PIN_SOUTH_RED    33
+#define PIN_SOUTH_YELLOW 16
+#define PIN_SOUTH_GREEN  17
 
-// East direction
-#define PIN_EAST_RED     18
-#define PIN_EAST_YELLOW  19
-#define PIN_EAST_GREEN   21
+// East direction (using former South pins)
+#define PIN_EAST_RED     12
+#define PIN_EAST_YELLOW  13
+#define PIN_EAST_GREEN   14
 
-// West direction
-#define PIN_WEST_RED     22
-#define PIN_WEST_YELLOW  23
-#define PIN_WEST_GREEN   25
+// West direction (using former North pins)
+#define PIN_WEST_RED     2
+#define PIN_WEST_YELLOW  4
+#define PIN_WEST_GREEN   5
 
 // ─────────────────────────────────────────────────────────────
 // Debug

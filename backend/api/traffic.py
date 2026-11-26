@@ -34,6 +34,15 @@ router = APIRouter(prefix="/traffic", tags=["Traffic"])
 _LAST_DB_PERSIST: dict[str, float] = {}
 
 
+_DENSITY_LEVEL_FLOOR = {
+    "LOW": 10.0,
+    "NORMAL": 30.0,
+    "MEDIUM": 55.0,
+    "HIGH": 75.0,
+    "TRAFFIC_JAM": 92.0,
+}
+
+
 @router.get("/current")
 async def get_current_traffic(
     current_user: User = Depends(get_current_user),
@@ -41,7 +50,12 @@ async def get_current_traffic(
     """Return latest real-time traffic metrics for all four approaches."""
     data = runtime.traffic_engine.get_all_traffic_data()
     for d in ("north", "south", "east", "west"):
-        data[d]["density"] = min(100.0, round(data[d]["vehicle_count"] * 2.5, 1))
+        info = data[d]
+        level = str(info.get("density_level", "LOW"))
+        floor_pct = _DENSITY_LEVEL_FLOOR.get(level, 10.0)
+        count_pct = min(100.0, round(info.get("vehicle_count", 0) * 2.5, 1))
+        queue_pct = float(info.get("queue_length", 0.0) or 0.0)
+        info["density"] = round(min(100.0, max(floor_pct, count_pct, queue_pct)), 1)
     return data
 
 

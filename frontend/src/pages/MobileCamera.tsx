@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Camera, RefreshCw, Video, VideoOff, QrCode, Wifi, WifiOff } from 'lucide-react'
+import {
+  Camera, RefreshCw, Video, VideoOff, QrCode, Wifi, WifiOff,
+  Maximize2, Minimize2, SlidersHorizontal, ChevronDown, SwitchCamera,
+} from 'lucide-react'
 import { Direction } from '../store/appStore'
 import { cameraApi } from '../services/api'
 import { wsService } from '../services/websocket'
@@ -34,6 +37,10 @@ export default function MobileCamera() {
   const [targetFps, setTargetFps] = useState(15)
   const [qrInput, setQrInput] = useState('')
   const [scanningQR, setScanningQR] = useState(false)
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment')
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [showControls, setShowControls] = useState(true)
+  const containerRef = useRef<HTMLDivElement>(null)
   const [modelStats, setModelStats] = useState<{
     connected: boolean
     vehicleCount: number
@@ -65,6 +72,12 @@ export default function MobileCamera() {
             fps: Number(p.fps ?? 0),
           })
         }
+      } else if (msg.type === 'camera_disconnected') {
+        const p = (msg.payload ?? {}) as Record<string, unknown>
+        if (p.direction === direction) {
+          stopStreaming()
+          toast('Stream disconnected from dashboard')
+        }
       }
     })
     return () => {
@@ -73,10 +86,28 @@ export default function MobileCamera() {
   }, [direction])
 
   useEffect(() => {
+    const onFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement))
+    document.addEventListener('fullscreenchange', onFsChange)
     return () => {
+      document.removeEventListener('fullscreenchange', onFsChange)
       stopStreaming()
     }
   }, [])
+
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement && containerRef.current?.requestFullscreen) {
+        await containerRef.current.requestFullscreen()
+        const ori = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }
+        ori?.lock?.('landscape').catch(() => {})
+      } else if (document.fullscreenElement) {
+        screen.orientation?.unlock?.()
+        await document.exitFullscreen()
+      }
+    } catch {
+      toast.error('Fullscreen mode blocked by browser')
+    }
+  }
 
   const applyQrString = (raw: string) => {
     try {
@@ -106,16 +137,17 @@ export default function MobileCamera() {
     }
   }
 
-  const requestCameraPermission = async (): Promise<MediaStream | null> => {
+  const requestCameraPermission = async (overrideFacing?: 'environment' | 'user'): Promise<MediaStream | null> => {
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       setPermissionState('denied')
       toast.error('Mobile camera requires HTTPS (or localhost). Open the HTTPS camera URL shown on the Cameras page.')
       return null
     }
+    const facing = overrideFacing ?? facingMode
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: { ideal: 'environment' },
+          facingMode: { ideal: facing },
           width: { ideal: 1280 },
           height: { ideal: 720 },
           frameRate: { ideal: 15, max: 30 },
@@ -236,13 +268,7 @@ export default function MobileCamera() {
       console.warn('WebRTC offer setup warning:', err)
     }
 
-    // 5. Stream frames with preallocated canvas & WS backpressure guard
-    const captureW = 512
-    const captureH = 288
-    if (canvasRef.current) {
-      canvasRef.current.width = captureW
-      canvasRef.current.height = captureH
-    }
+    // 5. Stream frames preserving actual horizontal/vertical video aspect ratio up to 640px
     const intervalMs = Math.max(40, Math.round(1000 / targetFps))
     let sentInSec = 0
     let lastTick = Date.now()
@@ -251,11 +277,23 @@ export default function MobileCamera() {
       const canvas = canvasRef.current
       if (!video || !canvas || video.readyState < 2) return
       if (wsService.getBufferedAmount() > 131072) return
+
+      const vw = video.videoWidth || 640
+      const vh = video.videoHeight || 360
+      const maxEdge = 640
+      const scale = Math.min(1, maxEdge / Math.max(vw, vh))
+      const captureW = Math.max(160, Math.round((vw * scale) / 2) * 2)
+      const captureH = Math.max(160, Math.round((vh * scale) / 2) * 2)
+      if (canvas.width !== captureW || canvas.height !== captureH) {
+        canvas.width = captureW
+        canvas.height = captureH
+      }
+
       const ctx = canvas.getContext('2d')
       if (!ctx) return
 
       ctx.drawImage(video, 0, 0, captureW, captureH)
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.55)
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.6)
 
       const ok = wsService.send({
         type: 'camera_frame',
@@ -264,6 +302,7 @@ export default function MobileCamera() {
           device_id: deviceId,
           junction_code: junctionCode,
           image: dataUrl,
+          resolution: `${captureW}x${captureH}`,
           timestamp: Date.now(),
         },
       })
@@ -280,6 +319,7 @@ export default function MobileCamera() {
     }, intervalMs)
 
     setStreaming(true)
+    setShowControls(false)
     toast.success(`Live streaming started for ${direction.toUpperCase()}`)
   }
 
@@ -308,142 +348,196 @@ export default function MobileCamera() {
     await startStreaming()
   }
 
+  const switchCameraFacing = async () => {
+    const nextFacing = facingMode === 'environment' ? 'user' : 'environment'
+    setFacingMode(nextFacing)
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop())
+      streamRef.current = null
+    }
+    const newStream = await requestCameraPermission(nextFacing)
+    if (newStream && pcRef.current) {
+      const newTrack = newStream.getVideoTracks()[0]
+      const sender = pcRef.current.getSenders().find((s) => s.track?.kind === 'video')
+      if (sender && newTrack) {
+        sender.replaceTrack(newTrack).catch(() => {})
+      }
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 flex flex-col items-center">
-      <div className="w-full max-w-lg space-y-4">
-        {/* Header */}
-        <div className="flex items-center justify-between card px-4 py-3">
-          <div className="flex items-center gap-2.5">
-            <Camera className="w-5 h-5 text-cyan-400" />
-            <div>
-              <h1 className="text-sm font-bold">Mobile Traffic Camera</h1>
-              <p className="text-[11px] font-mono text-slate-400">{deviceId}</p>
-            </div>
+    <div ref={containerRef} className="relative h-[100dvh] w-screen overflow-hidden bg-black text-slate-100 select-none">
+      {/* Full-screen live camera feed (object-contain prevents stretching/cropping in horizontal & vertical modes) */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        onClick={() => streaming && setShowControls((v) => !v)}
+        className="absolute inset-0 w-full h-full object-contain bg-black"
+      />
+      <canvas ref={canvasRef} className="hidden" />
+
+      {/* Camera permission overlay */}
+      {permissionState !== 'granted' && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-6 text-center bg-slate-950/90 backdrop-blur-sm">
+          <VideoOff className="w-12 h-12 text-slate-500 mb-3" />
+          <p className="text-sm text-slate-300 mb-4 max-w-xs">
+            Grant camera permission to preview & stream road traffic in full screen
+          </p>
+          <Button variant="primary" size="md" onClick={() => requestCameraPermission()}>
+            Enable Camera Access
+          </Button>
+        </div>
+      )}
+
+      {/* Floating Top HUD */}
+      <div className="absolute top-0 inset-x-0 z-30 p-3 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Camera className="w-4 h-4 text-cyan-400 shrink-0" />
+          <div className="min-w-0">
+            <p className="text-xs font-bold leading-tight truncate">
+              {direction.toUpperCase()} CAM
+            </p>
+            <p className="text-[10px] font-mono text-slate-300 truncate">{deviceId}</p>
           </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {streaming && (
+            <Badge variant="error" dot pulse>{fpsSent} FPS</Badge>
+          )}
           <Badge variant={connStatus === 'connected' ? 'success' : connStatus === 'connecting' ? 'warning' : 'default'} dot pulse={streaming}>
             {connStatus === 'connected' ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
             {connStatus.toUpperCase()}
           </Badge>
+          <button
+            onClick={switchCameraFacing}
+            title="Switch Front/Rear Camera"
+            className="p-2 rounded-lg bg-slate-900/80 border border-slate-700/80 text-slate-200 hover:bg-slate-800"
+          >
+            <SwitchCamera className="w-4 h-4" />
+          </button>
+          <button
+            onClick={toggleFullscreen}
+            title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+            className="p-2 rounded-lg bg-slate-900/80 border border-slate-700/80 text-slate-200 hover:bg-slate-800"
+          >
+            {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={() => setShowControls((v) => !v)}
+            title={showControls ? 'Hide Controls' : 'Show Controls'}
+            className="p-2 rounded-lg bg-slate-900/80 border border-slate-700/80 text-slate-200 hover:bg-slate-800"
+          >
+            {showControls ? <ChevronDown className="w-4 h-4" /> : <SlidersHorizontal className="w-4 h-4" />}
+          </button>
         </div>
+      </div>
 
-        {/* Video preview */}
-        <div className="card overflow-hidden">
-          <div className="relative aspect-video bg-black flex items-center justify-center">
-            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-            <canvas ref={canvasRef} className="hidden" />
-            {permissionState !== 'granted' && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-slate-950/90">
-                <VideoOff className="w-10 h-10 text-slate-600 mb-2" />
-                <p className="text-xs text-slate-400 mb-3">Grant camera permission to preview & stream road traffic</p>
-                <Button variant="primary" size="sm" onClick={requestCameraPermission}>
-                  Enable Camera Access
-                </Button>
-              </div>
-            )}
-            {streaming && (
-              <div className="absolute top-2 left-2 right-2 flex justify-between pointer-events-none">
-                <Badge variant="error" dot pulse>LIVE • {direction.toUpperCase()}</Badge>
-                <Badge variant="cyan">{fpsSent} FPS</Badge>
-              </div>
-            )}
-          </div>
-          {streaming && (
-            <div className="px-3 py-2 bg-slate-900/90 border-t border-slate-800 flex items-center justify-between text-[11px] font-mono">
-              <span className={modelStats.connected ? 'text-emerald-400' : 'text-amber-400'}>
-                {modelStats.connected
-                  ? `AI ${modelStats.fps.toFixed(1)} FPS (${modelStats.inferenceMs.toFixed(1)}ms)`
-                  : 'Waiting for AI Model ACK...'}
-              </span>
-              <span className="text-slate-300">
-                Vehicles: <strong className="text-cyan-400">{modelStats.vehicleCount}</strong> • {modelStats.densityLevel}
-              </span>
-            </div>
-          )}
+      {/* Live AI telemetry pill */}
+      {streaming && (
+        <div className="absolute top-14 inset-x-3 z-20 flex items-center justify-between px-3 py-1.5 rounded-lg bg-black/65 backdrop-blur-md border border-white/10 text-[11px] font-mono pointer-events-none">
+          <span className={modelStats.connected ? 'text-emerald-400' : 'text-amber-400'}>
+            {modelStats.connected
+              ? `AI ${modelStats.fps.toFixed(1)} FPS (${modelStats.inferenceMs.toFixed(1)}ms)`
+              : 'Waiting for AI Model ACK...'}
+          </span>
+          <span className="text-slate-200">
+            Vehicles: <strong className="text-cyan-400">{modelStats.vehicleCount}</strong> • {modelStats.densityLevel}
+          </span>
         </div>
+      )}
 
-        {/* Controls */}
-        <div className="card p-4 space-y-4">
-          <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Select Junction Direction</label>
-            <div className="grid grid-cols-4 gap-2">
+      {/* Floating Bottom Controls — scrollable in short landscape screens */}
+      {showControls ? (
+        <div className="absolute bottom-0 inset-x-0 z-30 p-2 sm:p-3 pb-3 sm:pb-5 bg-gradient-to-t from-black/95 via-black/80 to-transparent">
+          <div className="max-w-lg mx-auto max-h-[68dvh] overflow-y-auto bg-slate-950/85 backdrop-blur-md border border-slate-800 rounded-2xl p-3 space-y-2.5">
+            <div className="grid grid-cols-4 gap-1.5">
               {DIRECTIONS.map((d) => (
                 <button
                   key={d}
                   disabled={streaming}
                   onClick={() => setDirection(d)}
-                  className={`py-2.5 rounded-lg text-xs font-mono uppercase border transition-colors ${
+                  className={`py-2 rounded-lg text-xs font-mono uppercase border transition-colors ${
                     direction === d
-                      ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 font-bold'
-                      : 'bg-slate-900 border-slate-700 text-slate-400'
+                      ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200 font-bold'
+                      : 'bg-slate-900/90 border-slate-700 text-slate-400'
                   } disabled:opacity-60`}
                 >
                   {d}
                 </button>
               ))}
             </div>
-          </div>
 
-          <div className="grid grid-cols-3 gap-2">
-            <div>
-              <label className="block text-xs text-slate-400 mb-1">Junction Code</label>
+            <div className="grid grid-cols-3 gap-2">
               <input
                 type="text"
                 value={junctionCode}
                 onChange={(e) => setJunctionCode(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-slate-100"
+                aria-label="Junction Code"
+                className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-100"
               />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-400 mb-1">Target FPS</label>
               <select
                 disabled={streaming}
                 value={targetFps}
                 onChange={(e) => setTargetFps(Number(e.target.value))}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-xs font-mono text-slate-100 disabled:opacity-60"
+                aria-label="Target FPS"
+                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-100 disabled:opacity-60"
               >
                 <option value={10}>10 FPS</option>
                 <option value={15}>15 FPS</option>
                 <option value={20}>20 FPS</option>
               </select>
-            </div>
-            <div className="flex items-end">
               <Button variant="outline" size="sm" className="w-full" leftIcon={<QrCode className="w-3.5 h-3.5" />} onClick={scanQrFromVideo} isLoading={scanningQR}>
                 Scan QR
               </Button>
             </div>
-          </div>
 
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={qrInput}
-              onChange={(e) => setQrInput(e.target.value)}
-              placeholder="Or paste pairing QR / URL here"
-              className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200"
-            />
-            <Button variant="secondary" size="xs" onClick={() => qrInput && applyQrString(qrInput)}>
-              Apply
-            </Button>
-          </div>
-
-          <div className="flex gap-2 pt-2">
-            {!streaming ? (
-              <Button variant="primary" className="flex-1" leftIcon={<Video className="w-4 h-4" />} onClick={startStreaming}>
-                Start Live Streaming
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={qrInput}
+                onChange={(e) => setQrInput(e.target.value)}
+                placeholder="Paste pairing QR / URL"
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200"
+              />
+              <Button variant="secondary" size="xs" onClick={() => qrInput && applyQrString(qrInput)}>
+                Apply
               </Button>
-            ) : (
-              <>
-                <Button variant="danger" className="flex-1" leftIcon={<VideoOff className="w-4 h-4" />} onClick={stopStreaming}>
-                  Stop Stream
+            </div>
+
+            <div className="flex gap-2">
+              {!streaming ? (
+                <Button variant="primary" className="flex-1" leftIcon={<Video className="w-4 h-4" />} onClick={startStreaming}>
+                  Start Live Streaming
                 </Button>
-                <Button variant="secondary" leftIcon={<RefreshCw className="w-4 h-4" />} onClick={handleRestart}>
-                  Reconnect
-                </Button>
-              </>
-            )}
+              ) : (
+                <>
+                  <Button variant="danger" className="flex-1" leftIcon={<VideoOff className="w-4 h-4" />} onClick={stopStreaming}>
+                    Stop Stream
+                  </Button>
+                  <Button variant="secondary" leftIcon={<RefreshCw className="w-4 h-4" />} onClick={handleRestart}>
+                    Reconnect
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="absolute bottom-4 inset-x-0 z-30 flex justify-center gap-2 px-4">
+          {!streaming ? (
+            <Button variant="primary" leftIcon={<Video className="w-4 h-4" />} onClick={startStreaming}>
+              Start Live Streaming
+            </Button>
+          ) : (
+            <Button variant="danger" leftIcon={<VideoOff className="w-4 h-4" />} onClick={stopStreaming}>
+              Stop Stream
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

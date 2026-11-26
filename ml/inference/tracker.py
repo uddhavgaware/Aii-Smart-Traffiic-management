@@ -93,17 +93,18 @@ class VehicleTracker:
         self._reference_line = reference_line
 
         self._tracker = sv.ByteTrack(
-            track_activation_threshold=float(config.get("activation_threshold", 0.25)),
+            track_activation_threshold=float(config.get("activation_threshold", 0.15)),
             lost_track_buffer=int(config.get("max_age", 30)),
-            minimum_matching_threshold=float(config.get("match_threshold", 0.8)),
-            frame_rate=int(config.get("frame_rate", 5)),
-            minimum_consecutive_frames=int(config.get("min_hits", 3)),
+            minimum_matching_threshold=float(config.get("match_threshold", 0.90)),
+            frame_rate=int(config.get("frame_rate", 15)),
+            minimum_consecutive_frames=int(config.get("min_hits", 1)),
         )
 
-        # State for line-crossing counting
+        # State for line-crossing counting & per-track persistence
         self._prev_centroids: dict[int, np.ndarray] = {}   # track_id → centroid
         self._counted_ids: set[int] = set()                 # prevent double-count
         self._crossing_counts: dict[str, int] = {}          # class_name → n
+        self._frames_seen: dict[int, int] = {}              # track_id → total frames seen
 
         # Map track_id → (class_id, class_name, is_emergency)
         self._track_meta: dict[int, tuple[int, str, bool]] = {}
@@ -202,15 +203,16 @@ class VehicleTracker:
 
             # Recover meta from original detection list by class matching
             if tid not in self._track_meta:
-                # Find matching detection by class id
                 matched = next(
                     ((cid, cn, ie) for _, (cid, cn, ie) in det_meta.items() if cid == cls),
-                    (cls, f"class_{cls}", cls in {5, 6}),
+                    (cls, f"class_{cls}", detections.model_trained and (cls in {5, 6})),
                 )
                 self._track_meta[tid] = matched
 
             cid, cname, is_em = self._track_meta[tid]
             centroid = self._centroid(bbox)
+            seen = self._frames_seen.get(tid, 0) + 1
+            self._frames_seen[tid] = seen
 
             self._check_line_crossing(tid, centroid, cname)
             self._prev_centroids[tid] = centroid
@@ -223,7 +225,17 @@ class VehicleTracker:
                 class_name=cname,
                 confidence=conf,
                 is_emergency=is_em,
+                frames_seen=seen,
             ))
+
+        # Bound metadata caches against unbounded growth on long runs
+        if len(self._track_meta) > 1000:
+            active_ids = {t.track_id for t in tracks}
+            for stale_id in list(self._track_meta.keys()):
+                if stale_id not in active_ids:
+                    self._track_meta.pop(stale_id, None)
+                    self._prev_centroids.pop(stale_id, None)
+                    self._frames_seen.pop(stale_id, None)
 
         return TrackerResult(
             tracks=tracks,

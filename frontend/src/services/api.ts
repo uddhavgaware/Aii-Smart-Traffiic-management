@@ -112,6 +112,7 @@ export const cameraApi = {
   unregister: (direction: string) => api.delete(`/cameras/${direction}`),
   getJunctionCode: () => api.get<{ code: string; expires_in: number }>('/cameras/junction-code'),
   reconnect: (direction: string) => api.post(`/cameras/${direction}/reconnect`),
+  disconnect: (direction: string) => api.post(`/cameras/${direction}/disconnect`),
   getStatus: (direction: string) => api.get(`/cameras/${direction}/status`),
   getWebRTCConfig: () => api.get('/cameras/webrtc/config'),
   sendOffer: (payload: { camera_id: string; sdp: string; type: string }) =>

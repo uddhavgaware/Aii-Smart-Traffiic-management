@@ -25,6 +25,18 @@ from .visualizer import annotate_frame
 
 logger = logging.getLogger(__name__)
 
+_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+
+def preprocess_traffic_frame(frame: np.ndarray) -> np.ndarray:
+    """Fast YCrCb CLAHE enhancement applied only to dark/night frames (mean luma < 85)."""
+    ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
+    y_channel = ycrcb[:, :, 0]
+    if float(np.mean(y_channel)) >= 85.0:
+        return frame
+    ycrcb[:, :, 0] = _CLAHE.apply(y_channel)
+    return cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
+
 
 @dataclass
 class ProcessingResult:
@@ -111,9 +123,10 @@ class CameraProcessor:
     def process_sync(self, frame: np.ndarray, include_snapshot: bool = False) -> ProcessingResult:
         """Run full CV pipeline on one frame (called under GPU lock in async loop)."""
         roi = self._default_roi(frame)
-        det = self.model.detect(frame)
+        infer_frame = preprocess_traffic_frame(frame)
+        det = self.model.detect(infer_frame)
         tracks = self.tracker.update(det, frame)
-        density = self.density_analyzer.analyze(tracks, roi, frame=frame)
+        density = self.density_analyzer.analyze(tracks, roi, frame=frame, detections=det)
         emergency = self.emergency_detector.process(tracks, frame)
 
         self.predictor.update(self.direction, density.vehicle_count, density.level.value)

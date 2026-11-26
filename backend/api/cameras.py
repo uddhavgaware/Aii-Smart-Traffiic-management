@@ -208,6 +208,36 @@ async def reconnect_camera(
     return {"message": "Reconnect triggered", "direction": camera.direction, "camera_id": camera.id}
 
 
+@router.post("/{target}/disconnect", status_code=status.HTTP_200_OK)
+async def disconnect_camera(
+    target: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "operator")),
+) -> dict:
+    """Disconnect an active camera stream from the dashboard without deleting registration."""
+    if target in ("north", "south", "east", "west"):
+        stmt = select(Camera).where(Camera.direction == target)
+        direction = target
+    elif target.isdigit():
+        stmt = select(Camera).where(Camera.id == int(target))
+        direction = ""
+    else:
+        raise HTTPException(status_code=400, detail="Invalid camera identifier")
+
+    camera = (await db.execute(stmt)).scalar_one_or_none()
+    if camera:
+        direction = camera.direction
+        camera.status = "offline"
+        await db.flush()
+    elif not direction:
+        raise HTTPException(status_code=404, detail="Camera not found")
+
+    await ws_manager.broadcast("camera_disconnected", {"direction": direction})
+    await ws_manager.disconnect_camera(direction)
+    await runtime.log_system_event("camera_disconnected", "info", f"Camera disconnected from dashboard ({direction})")
+    return {"message": "Camera disconnected", "direction": direction}
+
+
 @router.delete("/{target}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def delete_camera(
     target: str,

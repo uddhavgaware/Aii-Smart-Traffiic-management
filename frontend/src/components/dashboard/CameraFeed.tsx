@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Maximize2, Minimize2, VideoOff, RefreshCw, AlertTriangle } from 'lucide-react'
+import { Maximize2, Minimize2, VideoOff, RefreshCw, AlertTriangle, Power } from 'lucide-react'
 import clsx from 'clsx'
 import { Direction, useAppStore } from '../../store/appStore'
 import { Badge } from '../ui/Badge'
@@ -8,6 +8,7 @@ import { StatusIndicator } from '../ui/StatusIndicator'
 interface CameraFeedProps {
   direction: Direction
   onReconnect?: (direction: Direction) => void
+  onDisconnect?: (direction: Direction) => void
   compact?: boolean
 }
 
@@ -29,7 +30,7 @@ function getDensityBadge(density: number) {
   return { label: 'LOW', variant: 'default' as const }
 }
 
-export function CameraFeed({ direction, onReconnect, compact = false }: CameraFeedProps) {
+export function CameraFeed({ direction, onReconnect, onDisconnect, compact = false }: CameraFeedProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -45,25 +46,43 @@ export function CameraFeed({ direction, onReconnect, compact = false }: CameraFe
     }
   }, [feed.stream])
 
-  // Draw bounding boxes on canvas overlay
+  // Draw bounding boxes on canvas overlay aligned to object-contain frame area
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const width = canvas.width
-    const height = canvas.height
-    ctx.clearRect(0, 0, width, height)
+    const cw = canvas.width
+    const ch = canvas.height
+    ctx.clearRect(0, 0, cw, ch)
 
     if (!feed.detections || feed.detections.length === 0) return
 
+    // Match inner display rectangle inside 16:9 canvas when object-contain is active
+    const [rw, rh] = (feed.resolution || '640x360').split('x').map(Number)
+    let ox = 0
+    let oy = 0
+    let dw = cw
+    let dh = ch
+    if (rw > 0 && rh > 0) {
+      const srcAspect = rw / rh
+      const boxAspect = cw / ch
+      if (srcAspect > boxAspect) {
+        dh = cw / srcAspect
+        oy = (ch - dh) / 2
+      } else {
+        dw = ch * srcAspect
+        ox = (cw - dw) / 2
+      }
+    }
+
     for (const det of feed.detections) {
       const [nx, ny, nw, nh] = det.bbox
-      const x = nx * width
-      const y = ny * height
-      const w = nw * width
-      const h = nh * height
+      const x = ox + nx * dw
+      const y = oy + ny * dh
+      const w = nw * dw
+      const h = nh * dh
       const isEmergency = det.class === 'ambulance' || det.class === 'fire_brigade'
       const color = CLASS_COLORS[det.class] ?? '#22d3ee'
 
@@ -85,7 +104,7 @@ export function CameraFeed({ direction, onReconnect, compact = false }: CameraFe
       ctx.fillStyle = isEmergency ? '#ffffff' : color
       ctx.fillText(label, x + 4, labelY - 4)
     }
-  }, [feed.detections])
+  }, [feed.detections, feed.resolution])
 
   const densityInfo = getDensityBadge(traffic.density || feed.density)
   const hasEmergency = feed.detections.some((d) => d.class === 'ambulance' || d.class === 'fire_brigade')
@@ -119,6 +138,15 @@ export function CameraFeed({ direction, onReconnect, compact = false }: CameraFe
           <span className="text-[11px] font-mono text-slate-400">
             {feed.fps.toFixed(1)} FPS
           </span>
+          {onDisconnect && feed.status === 'connected' && (
+            <button
+              onClick={() => onDisconnect(direction)}
+              className="p-1 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors"
+              title={`Disconnect ${direction} camera`}
+            >
+              <Power className="w-3.5 h-3.5" />
+            </button>
+          )}
           <button
             onClick={() => setIsFullscreen((v) => !v)}
             className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-100"
@@ -129,21 +157,21 @@ export function CameraFeed({ direction, onReconnect, compact = false }: CameraFe
         </div>
       </div>
 
-      {/* Video viewport */}
-      <div className={clsx('relative bg-slate-950 flex-1 overflow-hidden', compact ? 'aspect-video' : 'min-h-[210px]')}>
+      {/* Video viewport — keep strict aspect-video with object-contain so horizontal & vertical cameras never crop/skew bboxes */}
+      <div className={clsx('relative bg-black overflow-hidden', compact ? 'aspect-video' : 'min-h-[240px] aspect-video')}>
         {feed.stream ? (
           <video
             ref={videoRef}
             autoPlay
             playsInline
             muted
-            className="w-full h-full object-cover"
+            className="w-full h-full object-contain"
           />
         ) : snapshot ? (
           <img
             src={snapshot}
             alt={`${direction} live camera frame`}
-            className="w-full h-full object-cover"
+            className="w-full h-full object-contain"
           />
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 p-4 text-center">

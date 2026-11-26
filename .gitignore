@@ -30,9 +30,21 @@ ml/evaluation/results/*.json
 ml/evaluation/results/*.png
 ml/.ultralytics/
 yolov8n.pt
+yolov8s.pt
+yolov8m.pt
 ml/yolov8n.pt
+ml/demo_clips/vehicles.mp4
+ml/demo_clips/vehicles-2.mp4
+ml/demo_clips/car-detection.mp4
+ml/demo_clips/person-bicycle-car-detection.mp4
 !ml/models/checkpoints/.gitkeep
 !ml/datasets/.gitkeep
+
+# Local helper scripts & Arduino IDE copy (contains local WiFi/MQTT credentials)
+START_SERVERS.ps1
+STOP_SERVERS.ps1
+esp32/firmware/main/
+v
 
 # Logs
 logs/
