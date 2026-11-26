@@ -92,15 +92,16 @@ export function CameraFeed({ direction, onReconnect, onDisconnect, compact = fal
     if (!captureCanvasRef.current) {
       captureCanvasRef.current = document.createElement('canvas')
     }
-    const timer = setInterval(() => {
+    const dirIndex = ['north', 'south', 'east', 'west'].indexOf(direction)
+    const sendOneFrame = () => {
       const vid = uploadedVideoRef.current
       const cvs = captureCanvasRef.current
       if (!vid || !cvs || vid.readyState < 2 || vid.paused) return
-      if (wsService.getBufferedAmount() > 32768) return
+      if (wsService.getBufferedAmount() > 98304) return
 
       const vw = vid.videoWidth || 640
       const vh = vid.videoHeight || 360
-      const scale = Math.min(1, 512 / Math.max(vw, vh))
+      const scale = Math.min(1, 448 / Math.max(vw, vh))
       const cw = Math.max(160, Math.round((vw * scale) / 2) * 2)
       const ch = Math.max(160, Math.round((vh * scale) / 2) * 2)
       if (cvs.width !== cw || cvs.height !== ch) {
@@ -114,7 +115,7 @@ export function CameraFeed({ direction, onReconnect, onDisconnect, compact = fal
       const ctx = cvs.getContext('2d')
       if (!ctx) return
       ctx.drawImage(vid, 0, 0, cw, ch)
-      const dataUrl = cvs.toDataURL('image/jpeg', 0.48)
+      const dataUrl = cvs.toDataURL('image/jpeg', 0.42)
       wsService.send({
         type: 'camera_frame',
         payload: {
@@ -122,13 +123,23 @@ export function CameraFeed({ direction, onReconnect, onDisconnect, compact = fal
           device_id: `clip-${direction}`,
           junction_code: 'JCT-001',
           image: dataUrl,
-          resolution: `${cw}x${ch}`,
+          resolution: nextRes,
           timestamp: Date.now(),
         },
       })
-    }, 170)
+    }
 
-    return () => clearInterval(timer)
+    // Stagger start across 4 cards so NORTH doesn't starve EAST/WEST on the shared WebSocket
+    let timer: ReturnType<typeof setInterval> | null = null
+    const startDelay = setTimeout(() => {
+      sendOneFrame()
+      timer = setInterval(sendOneFrame, 250)
+    }, Math.max(0, dirIndex) * 60)
+
+    return () => {
+      clearTimeout(startDelay)
+      if (timer) clearInterval(timer)
+    }
   }, [sourceMode, uploadedClipUrl, direction])
 
   const clearUploadedClip = () => {

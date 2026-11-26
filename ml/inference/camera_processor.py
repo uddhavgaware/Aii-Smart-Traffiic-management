@@ -134,7 +134,7 @@ class CameraProcessor:
 
         now = time.time()
         self._frame_times.append(now)
-        self._frame_times = [t for t in self._frame_times if now - t <= 2.0]
+        self._frame_times = [t for t in self._frame_times if now - t <= 6.0]
         span = (self._frame_times[-1] - self._frame_times[0]) if len(self._frame_times) > 1 else 0.0
         fps = (len(self._frame_times) - 1) / span if span > 0.02 else 0.0
 

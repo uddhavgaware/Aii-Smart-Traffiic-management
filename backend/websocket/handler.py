@@ -34,21 +34,22 @@ _IN_FLIGHT_ML: dict[str, bool] = {}
 _PENDING_ML_FRAME: dict[str, tuple[str, WebSocket]] = {}
 _ML_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
 _ML_BACKOFF_UNTIL: float = 0.0
+_ML_CONSECUTIVE_ERRORS: int = 0
 
 
 def _get_ml_client() -> httpx.AsyncClient:
     global _ML_HTTP_CLIENT
     if _ML_HTTP_CLIENT is None or _ML_HTTP_CLIENT.is_closed:
         _ML_HTTP_CLIENT = httpx.AsyncClient(
-            timeout=2.5,
-            limits=httpx.Limits(max_connections=16, max_keepalive_connections=8),
+            timeout=8.0,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=12),
         )
     return _ML_HTTP_CLIENT
 
 
 async def _ml_worker(direction: str) -> None:
     """Drain the latest pending frame for one direction without phase-beating or double HTTP hops."""
-    global _ML_BACKOFF_UNTIL
+    global _ML_BACKOFF_UNTIL, _ML_CONSECUTIVE_ERRORS
     if _IN_FLIGHT_ML.get(direction, False):
         return
     _IN_FLIGHT_ML[direction] = True
@@ -83,6 +84,7 @@ async def _ml_worker(direction: str) -> None:
             )
             if resp.status_code == 200:
                 _ML_BACKOFF_UNTIL = 0.0
+                _ML_CONSECUTIVE_ERRORS = 0
                 res_json = resp.json()
                 runtime.ai_engine_status = "running"
                 runtime.last_inference_latency_ms = float(res_json.get("inference_ms", 0.0))
@@ -125,12 +127,16 @@ async def _ml_worker(direction: str) -> None:
                 )
             else:
                 if resp.status_code >= 500:
-                    _ML_BACKOFF_UNTIL = time.time() + 5.0
-                    runtime.ai_engine_status = "running" if runtime.demo_mode else "stopped"
+                    _ML_CONSECUTIVE_ERRORS += 1
+                    if _ML_CONSECUTIVE_ERRORS >= 4:
+                        _ML_BACKOFF_UNTIL = time.time() + 2.0
+                        runtime.ai_engine_status = "running" if runtime.demo_mode else "stopped"
                 logger.warning("ml_forward_http_error", status_code=resp.status_code, direction=direction)
     except Exception as exc:
-        _ML_BACKOFF_UNTIL = time.time() + 5.0
-        runtime.ai_engine_status = "running" if runtime.demo_mode else "stopped"
+        _ML_CONSECUTIVE_ERRORS += 1
+        if _ML_CONSECUTIVE_ERRORS >= 4:
+            _ML_BACKOFF_UNTIL = time.time() + 2.0
+            runtime.ai_engine_status = "running" if runtime.demo_mode else "stopped"
         logger.debug("ml_forward_failed", direction=direction, error=str(exc))
     finally:
         _IN_FLIGHT_ML[direction] = False
