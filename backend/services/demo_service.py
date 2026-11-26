@@ -59,12 +59,51 @@ def _resolve_clip_path(filenames: tuple[str, ...]) -> Optional[Path]:
     return None
 
 
+def _resolve_source_clip(direction: Direction, source: str) -> tuple[Optional[Path], tuple[float, float, float, float], bool]:
+    """Resolve local directional clip or cropped Docker fallback clip for a density preset."""
+    for base in _CANDIDATE_CLIPS_DIRS:
+        p = base / "directions" / direction.value / f"{source}.mp4"
+        if p.exists():
+            return p, (0.0, 0.0, 1.0, 1.0), False
+
+    if source == "low_traffic":
+        return _resolve_clip_path(("vehicles.mp4", "demo_approach_1.mp4")), (0.0, 0.0, 1.0, 1.0), direction in (Direction.SOUTH, Direction.WEST)
+    if source == "medium_traffic":
+        med_crops = {
+            Direction.NORTH: ((0.0, 0.08, 0.56, 1.0), False),
+            Direction.SOUTH: ((0.44, 0.08, 1.0, 1.0), False),
+            Direction.EAST: ((0.05, 0.05, 0.62, 0.95), True),
+            Direction.WEST: ((0.38, 0.05, 0.95, 0.95), True),
+        }
+        crop, flip = med_crops[direction]
+        return _resolve_clip_path(("vehicles-2.mp4", "demo_approach_2.mp4")), crop, flip
+    if source == "heavy_jam":
+        return _resolve_clip_path(("vehicles-2.mp4", "demo_approach_2.mp4")), (0.0, 0.0, 1.0, 1.0), direction in (Direction.SOUTH, Direction.WEST)
+    return None, (0.0, 0.0, 1.0, 1.0), False
+
+
 class DemoModeService:
     def __init__(self) -> None:
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._caps: Dict[Direction, Any] = {}
+        self._cap_keys: Dict[Direction, str] = {}
+        self.direction_sources: Dict[Direction, str] = {}
         self._http: Optional[httpx.AsyncClient] = None
+
+    def set_direction_source(self, direction: Direction, source: str) -> None:
+        """Select virtual video preset ('low_traffic', 'medium_traffic', 'heavy_jam') or 'live'."""
+        cap = self._caps.pop(direction, None)
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+        self._cap_keys.pop(direction, None)
+        if source == "live":
+            self.direction_sources.pop(direction, None)
+        else:
+            self.direction_sources[direction] = source
 
     async def start(self) -> None:
         if self._running:
@@ -95,14 +134,27 @@ class DemoModeService:
             except Exception:
                 pass
         self._caps.clear()
+        self._cap_keys.clear()
 
-    def _next_clip_jpeg(self, direction: Direction) -> Optional[bytes]:
+    def _next_clip_jpeg(self, direction: Direction, source: Optional[str] = None) -> Optional[bytes]:
         if not _HAS_CV2:
             return None
+
+        source_key = source or "demo"
         cap = self._caps.get(direction)
-        if cap is None:
-            filenames, start_frame = _CLIP_ASSIGNMENTS[direction]
-            clip_path = _resolve_clip_path(filenames)
+        if cap is None or self._cap_keys.get(direction) != source_key:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            if source:
+                clip_path, crop_box, flip_h = _resolve_source_clip(direction, source)
+                start_frame = 0
+            else:
+                filenames, start_frame = _CLIP_ASSIGNMENTS[direction]
+                clip_path = _resolve_clip_path(filenames)
+                crop_box, flip_h = (0.0, 0.0, 1.0, 1.0), False
             if clip_path is None:
                 return None
             cap = cv2.VideoCapture(str(clip_path))
@@ -112,6 +164,12 @@ class DemoModeService:
             if start_frame > 0:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame % total_frames)
             self._caps[direction] = cap
+            self._cap_keys[direction] = source_key
+        else:
+            if source:
+                _, crop_box, flip_h = _resolve_source_clip(direction, source)
+            else:
+                crop_box, flip_h = (0.0, 0.0, 1.0, 1.0), False
 
         ok, frame = cap.read()
         if not ok or frame is None:
@@ -126,15 +184,22 @@ class DemoModeService:
         step = 12 if total > 200 else 3
         cap.set(cv2.CAP_PROP_POS_FRAMES, (cur_pos + step) % total)
 
+        H, W = frame.shape[:2]
+        if crop_box != (0.0, 0.0, 1.0, 1.0):
+            x1, y1, x2, y2 = int(crop_box[0] * W), int(crop_box[1] * H), int(crop_box[2] * W), int(crop_box[3] * H)
+            frame = frame[y1:y2, x1:x2]
+        if flip_h:
+            frame = cv2.flip(frame, 1)
+
         frame = cv2.resize(frame, (640, 360))
         ok_enc, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
         return buf.tobytes() if ok_enc else None
 
-    async def _run_clip_tick(self) -> tuple[bool, Dict[Direction, bytes]]:
+    async def _run_clip_tick(self, target_sources: Dict[Direction, Optional[str]]) -> tuple[bool, Dict[Direction, bytes]]:
         """Attempt one tick using real demo video clips + ML server. Returns (ml_handled, raw_jpegs)."""
         raw_jpegs: Dict[Direction, bytes] = {}
-        for d in Direction:
-            jpg = self._next_clip_jpeg(d)
+        for d, src in target_sources.items():
+            jpg = self._next_clip_jpeg(d, source=src)
             if jpg:
                 raw_jpegs[d] = jpg
 
@@ -227,19 +292,29 @@ class DemoModeService:
 
     async def _loop(self) -> None:
         tick = 0
+        fallback_counts = {"low_traffic": 4, "medium_traffic": 19, "heavy_jam": 31}
         while self._running:
             try:
+                target_sources: Dict[Direction, Optional[str]] = {}
                 if runtime.demo_mode:
-                    handled_by_clips, raw_jpegs = await self._run_clip_tick()
+                    target_sources = {d: self.direction_sources.get(d) for d in Direction}
+                elif self.direction_sources:
+                    target_sources = dict(self.direction_sources)
+
+                if target_sources:
+                    handled_by_clips, raw_jpegs = await self._run_clip_tick(target_sources)
                     if handled_by_clips:
                         await asyncio.sleep(0.5)
                         continue
 
                     tick += 1
                     t = time.time()
-                    for idx, d in enumerate(Direction):
-                        base = int(8 + 14 * (0.5 + 0.5 * math.sin(tick * 0.25 + idx * 1.4)))
-                        count = max(0, base + random.randint(-2, 3))
+                    for idx, (d, src) in enumerate(target_sources.items()):
+                        if src in fallback_counts:
+                            count = fallback_counts[src]
+                        else:
+                            base = int(8 + 14 * (0.5 + 0.5 * math.sin(tick * 0.25 + idx * 1.4)))
+                            count = max(0, base + random.randint(-2, 3))
                         if count <= 5:
                             level = DensityLevel.LOW
                             density_pct = count * 4.0
@@ -308,8 +383,9 @@ class DemoModeService:
                     perf = collect_host_performance(inference_latency_ms=18.5, detection_fps=20.0)
                     await ws_manager.broadcast("performance_metrics", perf)
                     await ws_manager.broadcast("signal_update", runtime.get_signal_state_payload())
-
-                await asyncio.sleep(1.0 if raw_jpegs else 2.0)
+                    await asyncio.sleep(1.0 if raw_jpegs else 2.0)
+                else:
+                    await asyncio.sleep(1.0)
             except asyncio.CancelledError:
                 break
             except Exception as exc:

@@ -37,6 +37,7 @@ ml/demo_clips/vehicles.mp4
 ml/demo_clips/vehicles-2.mp4
 ml/demo_clips/car-detection.mp4
 ml/demo_clips/person-bicycle-car-detection.mp4
+ml/demo_clips/directions/
 !ml/models/checkpoints/.gitkeep
 !ml/datasets/.gitkeep
 

@@ -10,6 +10,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,8 +31,14 @@ from schemas.camera import (
     WebRTCOfferRequest,
 )
 from services.camera_registry import camera_registry
+from services.demo_service import demo_service
 from services.runtime import runtime
+from services.signal_controller import Direction
 from services.websocket_manager import ws_manager
+
+
+class CameraSourceRequest(BaseModel):
+    source: str  # 'live' | 'low_traffic' | 'medium_traffic' | 'heavy_jam'
 
 logger = get_logger(__name__)
 
@@ -234,8 +241,29 @@ async def disconnect_camera(
 
     await ws_manager.broadcast("camera_disconnected", {"direction": direction})
     await ws_manager.disconnect_camera(direction)
+    demo_service.set_direction_source(Direction(direction), "live")
     await runtime.log_system_event("camera_disconnected", "info", f"Camera disconnected from dashboard ({direction})")
     return {"message": "Camera disconnected", "direction": direction}
+
+
+@router.post("/{direction}/source", status_code=status.HTTP_200_OK)
+async def set_camera_source(
+    direction: str,
+    payload: CameraSourceRequest,
+    current_user: User = Depends(require_role("admin", "operator")),
+) -> dict:
+    """Switch a junction camera between live mobile input or built-in directional traffic clips."""
+    if direction not in ("north", "south", "east", "west"):
+        raise HTTPException(status_code=400, detail="Invalid direction")
+    if payload.source not in ("live", "low_traffic", "medium_traffic", "heavy_jam"):
+        raise HTTPException(status_code=400, detail="Invalid source preset")
+
+    demo_service.set_direction_source(Direction(direction), payload.source)
+    if payload.source == "live":
+        await ws_manager.broadcast("camera_disconnected", {"direction": direction})
+    else:
+        await ws_manager.broadcast("camera_connected", {"direction": direction})
+    return {"direction": direction, "source": payload.source}
 
 
 @router.delete("/{target}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
